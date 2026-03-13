@@ -619,7 +619,8 @@ static ggml_tensor * get_tensor(ggml_context * ctx, const char * name) {
 voxtral_model * voxtral_model_load_from_file(
     const std::string    & path,
     voxtral_log_callback   logger,
-    voxtral_gpu_backend    gpu)
+    voxtral_gpu_backend    gpu,
+    int32_t                gpu_device)
 {
     auto log_info = [&](const std::string & msg) {
         if (logger) logger(voxtral_log_level::info, msg);
@@ -650,7 +651,7 @@ voxtral_model * voxtral_model_load_from_file(
 
     auto try_cuda = [&]() -> bool {
 #ifdef GGML_USE_CUDA
-        weights_backend = ggml_backend_cuda_init(0);
+        weights_backend = ggml_backend_cuda_init(gpu_device);
         if (weights_backend) { resolved_gpu = voxtral_gpu_backend::cuda; return true; }
         log_info("CUDA backend init failed");
 #endif
@@ -668,7 +669,7 @@ voxtral_model * voxtral_model_load_from_file(
 
     auto try_vulkan = [&]() -> bool {
 #ifdef GGML_USE_VULKAN
-        weights_backend = ggml_backend_vk_init(0);
+        weights_backend = ggml_backend_vk_init(gpu_device);
         if (weights_backend) { resolved_gpu = voxtral_gpu_backend::vulkan; return true; }
         log_info("Vulkan backend init failed");
 #endif
@@ -1076,14 +1077,12 @@ static void clear_kv_cache(voxtral_context * ctx) {
     if (!ctx || !ctx->kv_self_k || !ctx->kv_self_v) {
         return;
     }
-    void * k_data = ggml_get_data(ctx->kv_self_k);
-    void * v_data = ggml_get_data(ctx->kv_self_v);
-    if (k_data) {
-        memset(k_data, 0, ggml_nbytes(ctx->kv_self_k));
-    }
-    if (v_data) {
-        memset(v_data, 0, ggml_nbytes(ctx->kv_self_v));
-    }
+    const size_t k_nbytes = ggml_nbytes(ctx->kv_self_k);
+    const size_t v_nbytes = ggml_nbytes(ctx->kv_self_v);
+
+    ggml_backend_tensor_memset(ctx->kv_self_k, 0, 0, k_nbytes);
+    ggml_backend_tensor_memset(ctx->kv_self_v, 0, 0, v_nbytes);
+
     ctx->kv_used = 0;
 }
 
@@ -1097,24 +1096,24 @@ static void kv_cache_shift_left(voxtral_context * ctx, int32_t shift) {
         return;
     }
 
-    uint8_t * k_data = (uint8_t *) ggml_get_data(ctx->kv_self_k);
-    uint8_t * v_data = (uint8_t *) ggml_get_data(ctx->kv_self_v);
-    if (!k_data || !v_data) {
-        return;
-    }
-
     const size_t row_bytes = ctx->kv_self_k->nb[1];
     const size_t layer_stride = ctx->kv_self_k->nb[2];
 
     for (int32_t l = 0; l < VOXTRAL_DEC_LAYERS; ++l) {
-        uint8_t * k_base = k_data + (size_t) l * layer_stride;
-        uint8_t * v_base = v_data + (size_t) l * layer_stride;
+        std::vector<uint8_t> k_layer(layer_stride);
+        std::vector<uint8_t> v_layer(layer_stride);
 
-        memmove(k_base, k_base + (size_t) shift * row_bytes, (size_t) (window - shift) * row_bytes);
-        memmove(v_base, v_base + (size_t) shift * row_bytes, (size_t) (window - shift) * row_bytes);
+        ggml_backend_tensor_get(ctx->kv_self_k, k_layer.data(), (size_t) l * layer_stride, layer_stride);
+        ggml_backend_tensor_get(ctx->kv_self_v, v_layer.data(), (size_t) l * layer_stride, layer_stride);
 
-        memset(k_base + (size_t) (window - shift) * row_bytes, 0, (size_t) shift * row_bytes);
-        memset(v_base + (size_t) (window - shift) * row_bytes, 0, (size_t) shift * row_bytes);
+        memmove(k_layer.data(), k_layer.data() + (size_t) shift * row_bytes, (size_t) (window - shift) * row_bytes);
+        memmove(v_layer.data(), v_layer.data() + (size_t) shift * row_bytes, (size_t) (window - shift) * row_bytes);
+
+        memset(k_layer.data() + (size_t) (window - shift) * row_bytes, 0, (size_t) shift * row_bytes);
+        memset(v_layer.data() + (size_t) (window - shift) * row_bytes, 0, (size_t) shift * row_bytes);
+
+        ggml_backend_tensor_set(ctx->kv_self_k, k_layer.data(), (size_t) l * layer_stride, layer_stride);
+        ggml_backend_tensor_set(ctx->kv_self_v, v_layer.data(), (size_t) l * layer_stride, layer_stride);
     }
 }
 

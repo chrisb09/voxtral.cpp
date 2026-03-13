@@ -25,6 +25,7 @@ struct cli_params {
     int32_t threads = 0;
     uint32_t seed = 0;
     int32_t max_tokens = 256;
+    int32_t gpu_device = 0;
     voxtral_log_level log_level = voxtral_log_level::info;
     voxtral_gpu_backend gpu = voxtral_gpu_backend::none;
 };
@@ -212,6 +213,7 @@ void print_usage(const char * argv0) {
         << "  --dump-tokens PATH    write generated token ids as a single line\n"
         << "  --output-text PATH    write decoded text to file (still prints to stdout)\n"
         << "  --gpu BACKEND         gpu backend: auto|cuda|metal|vulkan|none (default: none)\n"
+        << "  --gpu-device N        gpu device index (for multi-GPU systems, default: 0)\n"
         << "  --metal               alias for --gpu metal\n"
         << "  -h, --help            show this help\n";
 }
@@ -355,6 +357,12 @@ bool parse_args(int argc, char ** argv, cli_params & p) {
                 std::cerr << "invalid --gpu (expected: auto|cuda|metal|vulkan|none)\n";
                 return false;
             }
+        } else if (a == "--gpu-device") {
+            const char * v = need_value("--gpu-device");
+            if (!v || !parse_i32(v, p.gpu_device)) {
+                std::cerr << "invalid --gpu-device\n";
+                return false;
+            }
         } else if (a == "--metal") {
             p.gpu = voxtral_gpu_backend::metal;
         } else {
@@ -420,13 +428,14 @@ int main(int argc, char ** argv) {
         std::cerr << "voxtral_" << tag << ": " << msg << "\n";
     };
 
-    voxtral_model * model = voxtral_model_load_from_file(p.model, logger, p.gpu);
+    voxtral_model * model = voxtral_model_load_from_file(p.model, logger, p.gpu, p.gpu_device);
     if (!model) {
         return finish(2);
     }
 
     voxtral_context_params ctx_p;
     ctx_p.n_threads = p.threads;
+    ctx_p.gpu_device = p.gpu_device;
     // ctx_p.seed = p.seed;
     ctx_p.log_level = p.log_level;
     ctx_p.logger = logger;

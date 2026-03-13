@@ -102,6 +102,7 @@ struct voxtral_model;
 
 struct voxtral_context_params {
     int32_t              n_threads  = 0;
+    int32_t              gpu_device = 0;
     voxtral_log_level    log_level  = voxtral_log_level::info;
     voxtral_log_callback logger     = nullptr;
     voxtral_gpu_backend  gpu        = voxtral_gpu_backend::none;
@@ -130,7 +131,8 @@ struct voxtral_context;
 voxtral_model * voxtral_model_load_from_file(
     const std::string    & path,
     voxtral_log_callback   logger = nullptr,
-    voxtral_gpu_backend    gpu = voxtral_gpu_backend::none);
+    voxtral_gpu_backend    gpu = voxtral_gpu_backend::none,
+    int32_t                gpu_device = 0);
 
 void voxtral_model_free(voxtral_model * model);
 
