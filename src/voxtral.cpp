@@ -1,6 +1,7 @@
 #include "voxtral.h"
 #include "gguf.h"
 #include "ggml-cpu.h"
+#include "ggml-backend.h"
 #ifdef GGML_USE_METAL
 #include "ggml-metal.h"
 #endif
@@ -897,7 +898,7 @@ voxtral_context * voxtral_init_from_model(
 
     auto try_cuda_ctx = [&]() -> bool {
 #ifdef GGML_USE_CUDA
-        ctx->backend = ggml_backend_cuda_init(0);
+        ctx->backend = ggml_backend_cuda_init(params.gpu_device);
         if (ctx->backend) { ctx->gpu_type = voxtral_gpu_backend::cuda; return true; }
         LOG_WARN(ctx, "CUDA backend init failed");
 #endif
@@ -913,7 +914,7 @@ voxtral_context * voxtral_init_from_model(
     };
     auto try_vulkan_ctx = [&]() -> bool {
 #ifdef GGML_USE_VULKAN
-        ctx->backend = ggml_backend_vk_init(0);
+        ctx->backend = ggml_backend_vk_init(params.gpu_device);
         if (ctx->backend) { ctx->gpu_type = voxtral_gpu_backend::vulkan; return true; }
         LOG_WARN(ctx, "Vulkan backend init failed");
 #endif
@@ -943,6 +944,13 @@ voxtral_context * voxtral_init_from_model(
     } else {
         ctx->backend_cpu = ggml_backend_cpu_init();
         ggml_backend_cpu_set_n_threads(ctx->backend_cpu, ctx->n_threads);
+        ggml_backend_dev_t dev = ggml_backend_get_device(ctx->backend);
+        if (dev) {
+            LOG_INFO(ctx, "backend device: %s | %s | gpu_device=%d",
+                ggml_backend_dev_name(dev),
+                ggml_backend_dev_description(dev),
+                params.gpu_device);
+        }
         const char * gpu_name = "GPU";
         if (ctx->gpu_type == voxtral_gpu_backend::cuda)   gpu_name = "CUDA";
         if (ctx->gpu_type == voxtral_gpu_backend::metal)  gpu_name = "METAL";
