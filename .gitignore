@@ -95,3 +95,9 @@ vllm/
 # Temporary files
 .tmp/
 tmp/
+
+
+logs/
+*.ps1
+*.ipynb
+*.txt

@@ -91,7 +91,7 @@ enum class voxtral_gpu_backend : int {
 using voxtral_log_callback = std::function<void(voxtral_log_level, const std::string &)>;
 
 // ============================================================================
-// Model Weights (opaque in header, defined in .cpp)
+// Model Weights
 // ============================================================================
 
 struct voxtral_model;
@@ -103,6 +103,7 @@ struct voxtral_model;
 struct voxtral_context_params {
     int32_t              n_threads  = 0;
     int32_t              gpu_device = 0;
+    int32_t              max_parallel_streams = 1;
     voxtral_log_level    log_level  = voxtral_log_level::info;
     voxtral_log_callback logger     = nullptr;
     voxtral_gpu_backend  gpu        = voxtral_gpu_backend::none;
@@ -119,10 +120,11 @@ struct voxtral_result {
 };
 
 // ============================================================================
-// Context (opaque in header, defined in .cpp)
+// Context & Streams
 // ============================================================================
 
 struct voxtral_context;
+struct voxtral_stream;
 
 // ============================================================================
 // Public API
@@ -153,6 +155,39 @@ bool voxtral_transcribe_audio(
     const std::vector<float> & audio,
     int32_t            max_tokens,
     voxtral_result   & result);
+
+// ----------------------------------------------------------------------------
+// Multi-stream API
+// ----------------------------------------------------------------------------
+
+#define VOXTRAL_STREAM_MAX_AUDIO_SEC  120
+
+voxtral_stream * voxtral_stream_create(voxtral_context * ctx, int32_t slot_id = 0);
+void voxtral_stream_free(voxtral_stream * stream);
+void voxtral_stream_reset(voxtral_stream * stream);
+
+bool voxtral_stream_feed(
+    voxtral_stream * stream,
+    const float    * audio,
+    int32_t          n_samples,
+    std::string    & new_text);
+
+bool voxtral_stream_flush(
+    voxtral_stream * stream,
+    std::string    & remaining_text);
+
+bool voxtral_stream_feed_batched(
+    voxtral_context * ctx,
+    voxtral_stream ** streams,
+    const float    ** audios,
+    int32_t         * n_samples,
+    int32_t           n_streams,
+    std::string     * out_texts);
+
+bool voxtral_debug_copy_encoder_output(
+    const voxtral_context * ctx,
+    int32_t                 slot_id,
+    std::vector<float>    & out);
 
 #endif // __cplusplus
 

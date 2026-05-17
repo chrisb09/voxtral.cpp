@@ -1,4 +1,4 @@
-#!/bin/bash
+﻿#!/bin/bash
 # Download Voxtral Realtime 4B GGUF model from HuggingFace
 #
 # Usage: ./download_model.sh [QUANT] [--dir DIR]
