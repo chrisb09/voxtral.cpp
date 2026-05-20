@@ -710,10 +710,15 @@ bool voxtral_stream_feed_batched(voxtral_context * ctx, voxtral_stream ** ss, co
     while (steps < 32) {
         std::vector<int32_t> act; for (int i = 0; i < n_ss; i++) { if (ss[i]->prefilled && ss[i]->dec_position < ss[i]->dec_positions_total) act.push_back(i); }
         if (act.empty()) break;
-        std::vector<int32_t> sids(N); for (int i=0; i<N; i++) sids[i]=i;
-        std::vector<int32_t> toks(N, 32), poss(N, 0), kvs(N, 0);
-        for (int i : act) { int32_t sid = ss[i]->slot_id; toks[sid]=ss[i]->last_token; poss[sid]=ss[i]->dec_position; kvs[sid]=ss[i]->kv_used; }
-        std::vector<float> lbs(VOXTRAL_VOCAB_SIZE * N); if (!run_decoder_step_batched(ctx, (int)act.size(), sids.data(), toks.data(), poss.data(), kvs.data(), nullptr, lbs.data())) return false;
+        std::vector<int32_t> sids(N), toks(N, 32), poss(N, 0), kvs(N, 0);
+        for (int i=0; i<N; i++) sids[i] = i;
+        for (int i=0; i<n_ss; i++) {
+            int32_t sid = ss[i]->slot_id;
+            toks[sid] = ss[i]->last_token;
+            poss[sid] = ss[i]->dec_position;
+            kvs[sid] = ss[i]->kv_used;
+        }
+        std::vector<float> lbs(VOXTRAL_VOCAB_SIZE * N); if (!run_decoder_step_batched(ctx, N, sids.data(), toks.data(), poss.data(), kvs.data(), nullptr, lbs.data())) return false;
         for (int i : act) {
             voxtral_stream * s = ss[i]; int32_t sid = s->slot_id; if (s->kv_used < 1000) s->kv_used++;
             const float * l = lbs.data() + (size_t)sid * VOXTRAL_VOCAB_SIZE;
@@ -737,3 +742,6 @@ bool voxtral_debug_copy_encoder_output(const voxtral_context * ctx, int32_t slot
 bool voxtral_transcribe_audio(voxtral_context & ctx, const std::vector<float> & audio, int32_t max_tokens, voxtral_result & result) { return false; }
 bool voxtral_transcribe_file(voxtral_context & ctx, const std::string & path, int32_t max_tokens, voxtral_result & result) { return false; }
 bool run_encoder_chunk_kv(voxtral_context * c, const float * m, int32_t f, int32_t k, int32_t * l) { return false; }
+
+int32_t voxtral_stream_get_last_token(const voxtral_stream * s) { return s->last_token; }
+void voxtral_stream_advance_dummy(voxtral_stream * s, int32_t n) { s->samples_processed += n; s->enc_tokens_total = (s->samples_processed / 320); s->dec_positions_total = s->enc_tokens_total / 4; while (s->dec_position < s->dec_positions_total) { s->all_tokens.push_back(32); s->dec_position++; } }
