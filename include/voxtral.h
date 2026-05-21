@@ -191,6 +191,7 @@ bool voxtral_debug_copy_encoder_output(
 
 int32_t voxtral_stream_get_last_token(const voxtral_stream * stream);
 void    voxtral_stream_advance_dummy(voxtral_stream * stream, int32_t n_samples);
+int32_t voxtral_stream_get_backlog_ms(const voxtral_stream * stream);
 
 #endif // __cplusplus
 

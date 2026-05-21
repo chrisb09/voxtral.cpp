@@ -745,3 +745,9 @@ bool run_encoder_chunk_kv(voxtral_context * c, const float * m, int32_t f, int32
 
 int32_t voxtral_stream_get_last_token(const voxtral_stream * s) { return s->last_token; }
 void voxtral_stream_advance_dummy(voxtral_stream * s, int32_t n) { s->samples_processed += n; s->enc_tokens_total = (s->samples_processed / 320); s->dec_positions_total = s->enc_tokens_total / 4; while (s->dec_position < s->dec_positions_total) { s->all_tokens.push_back(32); s->dec_position++; } }
+int32_t voxtral_stream_get_backlog_ms(const voxtral_stream * s) {
+    int32_t submitted = (int32_t)s->audio_buf.size() - 48640;
+    int32_t decoded = s->dec_position * 1280;
+    int32_t lag = submitted - decoded;
+    return lag < 0 ? 0 : lag / 16;
+}
