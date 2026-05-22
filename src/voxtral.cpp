@@ -667,14 +667,14 @@ bool stream_process_audio_to_encoder(voxtral_stream * s, const float * a, int32_
     while (true) {
         int32_t ms = s->samples_processed;
         int32_t avail = (int)s->audio_buf.size() - ms;
-        if (avail < 51200) break; // 3.2s
+        if (avail < 12800) break; // 0.8s window
         
-        int32_t nf = 3000; std::vector<float> mel(128 * nf);
-        compute_mel_spectrogram(s->audio_buf.data() + ms, 51200, s->ctx->mel_filters_cpu.data(), s->ctx->hann_window.data(), mel.data(), &nf);
+        int32_t nf = 800; std::vector<float> mel(128 * nf);
+        compute_mel_spectrogram(s->audio_buf.data() + ms, 12800, s->ctx->mel_filters_cpu.data(), s->ctx->hann_window.data(), mel.data(), &nf);
         
         int32_t e_len = 0; if (!run_encoder_chunk(s->ctx, mel.data(), nf, 0, &e_len)) return false;
         
-        int32_t e_count = 160; 
+        int32_t e_count = 40; 
         std::vector<uint8_t> tmp(e_count * 1280 * 4); ggml_backend_tensor_get(s->ctx->encoder_chunk_output, tmp.data(), 0, tmp.size());
         int32_t abs_enc = (ms / 320);
         ggml_backend_tensor_set(s->ctx->encoder_output, tmp.data(), (size_t)s->slot_id * 4000 * 1280 * 4 + (size_t)abs_enc * 1280 * 4, tmp.size());
@@ -684,7 +684,7 @@ bool stream_process_audio_to_encoder(voxtral_stream * s, const float * a, int32_
         ggml_backend_sched_reset(s->ctx->sched_adapter); if (!ggml_backend_sched_alloc_graph(s->ctx->sched_adapter, gf_ada)) { ggml_free(gctx_ada); return false; }
         ggml_backend_sched_graph_compute(s->ctx->sched_adapter, gf_ada); ggml_free(gctx_ada);
         
-        s->samples_processed += 51200; s->enc_tokens_total = (s->samples_processed / 320); s->dec_positions_total = s->enc_tokens_total / 4;
+        s->samples_processed += 12800; s->enc_tokens_total = (s->samples_processed / 320); s->dec_positions_total = s->enc_tokens_total / 4;
     }
     if (!s->prefilled && s->dec_positions_total >= 39) stream_decoder_prefill(s); return s->prefilled;
 }
