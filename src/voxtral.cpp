@@ -686,7 +686,7 @@ bool stream_process_audio_to_encoder(voxtral_stream * s, const float * a, int32_
         
         s->samples_processed += 12800; s->enc_tokens_total = (s->samples_processed / 320); s->dec_positions_total = s->enc_tokens_total / 4;
     }
-    if (!s->prefilled && s->dec_positions_total >= 39) stream_decoder_prefill(s); return s->prefilled;
+    if (!s->prefilled && s->dec_positions_total >= 1) stream_decoder_prefill(s); return s->prefilled;
 }
 
 bool stream_decode_available(voxtral_stream * s, std::string & text, bool early) {
