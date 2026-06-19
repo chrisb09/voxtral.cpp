@@ -233,7 +233,11 @@ void compute_mel_spectrogram(const float * audio, int32_t n_samples, const float
     if (n_frames <= 0) return;
     const stft_plan & plan = get_stft_plan();
     std::vector<float> centered(n_samples + 400);
-    for (int i=0; i<n_samples+400; i++) { int src = i - 200; centered[i] = audio[reflect_index(src, n_samples)]; }
+    for (int i=0; i<n_samples+400; i++) { 
+        int src = i - 200; 
+        // Add microscopic comfort noise (1e-5) to prevent silent trap
+        centered[i] = audio[reflect_index(src, n_samples)] + 0.00001f; 
+    }
     std::vector<float> windowed(400), power(201), accum(128);
     for (int f=0; f<n_frames; f++) {
         const float * frame_ptr = centered.data() + f*160;
@@ -249,7 +253,7 @@ void compute_mel_spectrogram(const float * audio, int32_t n_samples, const float
         }
         for (int m=0; m<128; m++) {
             float v = std::max(accum[m], 1e-10f); v = log10f(v);
-            v = std::max(v, -6.5f); mel_out[m*n_frames+f] = (v+4.f)/4.f;
+            v = std::max(v, -6.5f); mel_out[m*n_frames+f] = (v+4.5f)/4.f;
         }
     }
 }
@@ -648,18 +652,27 @@ voxtral_stream * voxtral_stream_create(voxtral_context * ctx, int32_t slot_id) {
 void voxtral_stream_free(voxtral_stream * s) { delete s; }
 void voxtral_stream_reset(voxtral_stream * s) {
     if (!s) return;
-    s->audio_buf.assign(48640, 0.f);
+    s->audio_buf.clear();
     s->samples_processed = 0; s->all_tokens.clear(); s->tokens_reported = 0;
     s->last_token = VOXTRAL_TOKEN_STREAMING_PAD; s->dec_position = 0; s->kv_used = 0; s->enc_tokens_total = 0; s->enc_kv_used = 0;
     s->dec_positions_total = 0; s->consecutive_pad = 0; s->seen_text = false; s->prefilled = false; clear_kv_cache_slotted(s->ctx, s->slot_id);
 }
 
 static bool stream_decoder_prefill(voxtral_stream * s) {
-    std::vector<int32_t> ids = {VOXTRAL_TOKEN_BOS}; for (int i=0; i<38; i++) ids.push_back(VOXTRAL_TOKEN_STREAMING_PAD);
-    std::vector<float> logits(VOXTRAL_VOCAB_SIZE); if (!run_decoder_prefill(s->ctx, s->slot_id, ids.data(), (int)ids.size()-1, logits.data())) return false;
-    s->kv_used = (int)ids.size()-1; if (!run_decoder_step(s->ctx, s->slot_id, ids.back(), (int)ids.size()-1, (int)ids.size()-1, s->kv_used, logits.data())) return false;
-    s->kv_used++; int32_t t = (int32_t)(std::max_element(logits.begin(), logits.end()) - logits.begin());
-    s->all_tokens.push_back(t); s->last_token = t; s->dec_position = (int)ids.size(); s->prefilled = true; return true;
+    // Force Whisper English Transcription Header
+    std::vector<int32_t> ids = {50257, 50259, 50359, 50363};
+    std::vector<float> logits(VOXTRAL_VOCAB_SIZE); if (!run_decoder_prefill(s->ctx, s->slot_id, ids.data(), (int)ids.size(), logits.data())) return false;
+    
+    int32_t t = (int32_t)(std::max_element(logits.begin(), logits.end()) - logits.begin());
+    s->all_tokens.push_back(t); s->last_token = t; 
+    s->dec_position = (int)ids.size() + 1;
+    s->kv_used = (int)ids.size();
+    
+    printf("[slot %d] Prefill done. Header: ", s->slot_id);
+    for (int id : ids) printf("%d ", id);
+    printf("-> First token: %d\n", t);
+    
+    s->prefilled = true; return true;
 }
 
 bool stream_process_audio_to_encoder(voxtral_stream * s, const float * a, int32_t n) {
@@ -668,27 +681,33 @@ bool stream_process_audio_to_encoder(voxtral_stream * s, const float * a, int32_
         int32_t ms = s->samples_processed;
         int32_t avail = (int)s->audio_buf.size() - ms;
         if (avail < 12800) break; // 0.8s window
-        
+
+        printf("[slot %d] Triggering encoder: ms=%d avail=%d\n", s->slot_id, ms, avail);
+
         int32_t nf = 800; std::vector<float> mel(128 * nf);
         compute_mel_spectrogram(s->audio_buf.data() + ms, 12800, s->ctx->mel_filters_cpu.data(), s->ctx->hann_window.data(), mel.data(), &nf);
-        
+
         int32_t e_len = 0; if (!run_encoder_chunk(s->ctx, mel.data(), nf, 0, &e_len)) return false;
-        
+
         int32_t e_count = 40; 
         std::vector<uint8_t> tmp(e_count * 1280 * 4); ggml_backend_tensor_get(s->ctx->encoder_chunk_output, tmp.data(), 0, tmp.size());
         int32_t abs_enc = (ms / 320);
         ggml_backend_tensor_set(s->ctx->encoder_output, tmp.data(), (size_t)s->slot_id * 4000 * 1280 * 4 + (size_t)abs_enc * 1280 * 4, tmp.size());
-        
+
         ggml_context * gctx_ada = ggml_init({1024*1024, nullptr, true});
         ggml_cgraph * gf_ada = build_adapter_graph_slice(s->ctx, gctx_ada, s->slot_id, abs_enc, e_count);
         ggml_backend_sched_reset(s->ctx->sched_adapter); if (!ggml_backend_sched_alloc_graph(s->ctx->sched_adapter, gf_ada)) { ggml_free(gctx_ada); return false; }
         ggml_backend_sched_graph_compute(s->ctx->sched_adapter, gf_ada); ggml_free(gctx_ada);
-        
-        s->samples_processed += 12800; s->enc_tokens_total = (s->samples_processed / 320); s->dec_positions_total = s->enc_tokens_total / 4;
-    }
-    if (!s->prefilled && s->dec_positions_total >= 1) stream_decoder_prefill(s); return s->prefilled;
-}
 
+        s->samples_processed += 12800; s->enc_tokens_total = (s->samples_processed / 320); s->dec_positions_total = s->enc_tokens_total / 4;
+        printf("[slot %d] Encoder done: samples_proc=%d enc_tokens=%d dec_pos_total=%d\n", s->slot_id, s->samples_processed, s->enc_tokens_total, s->dec_positions_total);
+    }
+    if (!s->prefilled && s->dec_positions_total >= 1) {
+        printf("[slot %d] Triggering prefill (Hot Start)\n", s->slot_id);
+        stream_decoder_prefill(s);
+    }
+    return s->prefilled;
+}
 bool stream_decode_available(voxtral_stream * s, std::string & text, bool early) {
     while (s->dec_position < s->dec_positions_total) {
         std::vector<float> lgt(VOXTRAL_VOCAB_SIZE); if (!run_decoder_step(s->ctx, s->slot_id, s->last_token, s->dec_position, s->dec_position, s->kv_used, lgt.data())) return false;
@@ -723,6 +742,10 @@ bool voxtral_stream_feed_batched(voxtral_context * ctx, voxtral_stream ** ss, co
             voxtral_stream * s = ss[i]; int32_t sid = s->slot_id; if (s->kv_used < 1000) s->kv_used++;
             const float * l = lbs.data() + (size_t)sid * VOXTRAL_VOCAB_SIZE;
             int32_t t = (int32_t)(std::max_element(l, l + VOXTRAL_VOCAB_SIZE) - l);
+            
+            // DEBUG: Log every single token generated
+            printf("[slot %d] pos=%d token=%d\n", sid, s->dec_position, t);
+
             s->all_tokens.push_back(t); s->last_token = t; s->dec_position++; if (t == VOXTRAL_TOKEN_EOS) s->dec_position = s->dec_positions_total;
         }
         steps++;
@@ -746,7 +769,7 @@ bool run_encoder_chunk_kv(voxtral_context * c, const float * m, int32_t f, int32
 int32_t voxtral_stream_get_last_token(const voxtral_stream * s) { return s->last_token; }
 void voxtral_stream_advance_dummy(voxtral_stream * s, int32_t n) { s->samples_processed += n; s->enc_tokens_total = (s->samples_processed / 320); s->dec_positions_total = s->enc_tokens_total / 4; while (s->dec_position < s->dec_positions_total) { s->all_tokens.push_back(32); s->dec_position++; } }
 int32_t voxtral_stream_get_backlog_ms(const voxtral_stream * s) {
-    int32_t submitted = (int32_t)s->audio_buf.size() - 48640;
+    int32_t submitted = (int32_t)s->audio_buf.size();
     int32_t decoded = s->dec_position * 1280;
     int32_t lag = submitted - decoded;
     return lag < 0 ? 0 : lag / 16;
